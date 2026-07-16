@@ -1,0 +1,92 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { Contract, JsonRpcProvider, Wallet } from "ethers";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const daoAbi = JSON.parse(readFileSync(path.join(__dirname, "../lib/abi/DAOVoting.json"), "utf8"));
+
+const DAO_ADDRESS = process.env.NEXT_PUBLIC_DAO_ADDRESS;
+const RPC_URL = process.env.RPC_URL;
+const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
+const RELAYER_ADDRESS = process.env.RELAYER_ADDRESS;
+const INTERVAL_SECONDS = Number(process.env.DAEMON_INTERVAL_SECONDS ?? "15");
+
+function log(msg) {
+  console.log(`[${new Date().toISOString()}] ${msg}`);
+}
+
+if (!DAO_ADDRESS || !RPC_URL || !RELAYER_PRIVATE_KEY) {
+  console.error("Faltan NEXT_PUBLIC_DAO_ADDRESS, RPC_URL o RELAYER_PRIVATE_KEY en el entorno.");
+  process.exit(1);
+}
+
+// cacheTimeout: -1 disables ethers' default 250ms response cache, which
+// otherwise races with fast-mining local chains and returns a stale nonce
+// when this same wallet executes several approved proposals in one tick.
+const provider = new JsonRpcProvider(RPC_URL, undefined, { cacheTimeout: -1 });
+const relayerWallet = new Wallet(RELAYER_PRIVATE_KEY, provider);
+
+if (RELAYER_ADDRESS && RELAYER_ADDRESS.toLowerCase() !== relayerWallet.address.toLowerCase()) {
+  console.error(
+    `RELAYER_ADDRESS (${RELAYER_ADDRESS}) no coincide con la dirección derivada de RELAYER_PRIVATE_KEY (${relayerWallet.address}).`
+  );
+  process.exit(1);
+}
+
+const daoRead = new Contract(DAO_ADDRESS, daoAbi, provider);
+const daoWrite = new Contract(DAO_ADDRESS, daoAbi, relayerWallet);
+
+async function checkAndExecute() {
+  const events = await daoRead.queryFilter(daoRead.filters.ProposalCreated());
+  const ids = [...new Set(events.map((e) => e.args.id))];
+
+  if (ids.length === 0) {
+    log("No hay propuestas creadas todavía.");
+    return;
+  }
+
+  const executionDelay = Number(await daoRead.executionDelay());
+  // Use the chain's own clock, not the host machine's — this is what
+  // DAOVoting.executeProposal() itself checks via block.timestamp, and the
+  // two can drift (e.g. a chain fast-forwarded with evm_increaseTime).
+  const now = (await provider.getBlock("latest")).timestamp;
+  let eligibleCount = 0;
+
+  for (const id of ids) {
+    const p = await daoRead.getProposal(id);
+    if (p.executed) continue;
+
+    const isPastDelay = now > Number(p.deadline) + executionDelay;
+    const isApproved = p.votesFor > p.votesAgainst;
+    if (!isPastDelay || !isApproved) continue;
+
+    eligibleCount++;
+    log(`Ejecutando propuesta #${id} (votosFor=${p.votesFor}, votosAgainst=${p.votesAgainst})...`);
+    try {
+      const tx = await daoWrite.executeProposal(id);
+      const receipt = await tx.wait();
+      log(`Propuesta #${id} ejecutada. tx=${receipt.hash}`);
+    } catch (err) {
+      log(`ERROR ejecutando propuesta #${id}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (eligibleCount === 0) {
+    log(`Revisadas ${ids.length} propuestas, ninguna elegible para ejecución.`);
+  }
+}
+
+async function main() {
+  log(`Daemon iniciado. Relayer=${relayerWallet.address}. Intervalo=${INTERVAL_SECONDS}s.`);
+  for (;;) {
+    try {
+      await checkAndExecute();
+    } catch (err) {
+      log(`ERROR en el ciclo de verificación: ${err instanceof Error ? err.message : err}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL_SECONDS * 1000));
+  }
+}
+
+main();
