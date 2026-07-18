@@ -89,7 +89,7 @@ contract DAOVotingTest is Test {
     function _createProposal() internal returns (uint256 id, uint256 deadline) {
         deadline = block.timestamp + 1 days;
         vm.prank(whale);
-        dao.createProposal(recipient, 2 ether, deadline);
+        dao.createProposal(recipient, 2 ether, deadline, "Test proposal description");
         id = 1;
     }
 
@@ -124,19 +124,19 @@ contract DAOVotingTest is Test {
         // alice holds 1 ether out of 11 ether total (~9%), below the 10% bar.
         vm.prank(alice);
         vm.expectRevert("DAOVoting: insufficient balance to propose");
-        dao.createProposal(recipient, 1 ether, block.timestamp + 1 days);
+        dao.createProposal(recipient, 1 ether, block.timestamp + 1 days, "desc");
     }
 
     function test_CreateProposal_RevertsPastDeadline() public {
         vm.prank(whale);
         vm.expectRevert("DAOVoting: deadline in past");
-        dao.createProposal(recipient, 1 ether, block.timestamp);
+        dao.createProposal(recipient, 1 ether, block.timestamp, "desc");
     }
 
     function test_CreateProposal_RevertsAmountExceedsTotalBalance() public {
         vm.prank(whale);
         vm.expectRevert("DAOVoting: invalid amount");
-        dao.createProposal(recipient, 100 ether, block.timestamp + 1 days);
+        dao.createProposal(recipient, 100 ether, block.timestamp + 1 days, "desc");
     }
 
     // --- vote --------------------------------------------------------

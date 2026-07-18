@@ -24,6 +24,7 @@ contract DAOVoting is ERC2771Context {
         uint256 votesAbstain;
         bool executed;
         address proposer;
+        string description;
     }
 
     uint256 public immutable minVoteBalance;
@@ -38,10 +39,15 @@ contract DAOVoting is ERC2771Context {
 
     event Funded(address indexed contributor, uint256 amount);
     event ProposalCreated(
-        uint256 indexed id, address indexed proposer, address recipient, uint256 amount, uint256 deadline
+        uint256 indexed id,
+        address indexed proposer,
+        address recipient,
+        uint256 amount,
+        uint256 deadline,
+        string description
     );
     event VoteCast(uint256 indexed proposalId, address indexed voter, VoteType voteType);
-    event ProposalExecuted(uint256 indexed id, address indexed recipient, uint256 amount);
+    event ProposalExecuted(uint256 indexed id, address indexed recipient, uint256 amount, address indexed executor);
 
     constructor(address trustedForwarder, uint256 minVoteBalance_, uint256 executionDelay_)
         ERC2771Context(trustedForwarder)
@@ -58,7 +64,9 @@ contract DAOVoting is ERC2771Context {
         emit Funded(sender, msg.value);
     }
 
-    function createProposal(address recipient, uint256 amount, uint256 deadline) external {
+    function createProposal(address recipient, uint256 amount, uint256 deadline, string calldata description)
+        external
+    {
         require(recipient != address(0), "DAOVoting: invalid recipient");
         require(deadline > block.timestamp, "DAOVoting: deadline in past");
         require(amount > 0 && amount <= _totalBalance, "DAOVoting: invalid amount");
@@ -79,10 +87,11 @@ contract DAOVoting is ERC2771Context {
             votesAgainst: 0,
             votesAbstain: 0,
             executed: false,
-            proposer: proposer
+            proposer: proposer,
+            description: description
         });
 
-        emit ProposalCreated(proposalId, proposer, recipient, amount, deadline);
+        emit ProposalCreated(proposalId, proposer, recipient, amount, deadline, description);
     }
 
     function vote(uint256 proposalId, VoteType voteType) external {
@@ -122,7 +131,7 @@ contract DAOVoting is ERC2771Context {
         (bool success,) = p.recipient.call{value: p.amount}("");
         require(success, "DAOVoting: transfer failed");
 
-        emit ProposalExecuted(proposalId, p.recipient, p.amount);
+        emit ProposalExecuted(proposalId, p.recipient, p.amount, _msgSender());
     }
 
     function getProposal(uint256 proposalId) external view returns (Proposal memory) {

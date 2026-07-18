@@ -15,7 +15,7 @@ export function ConnectWallet() {
         <button
           onClick={connect}
           disabled={isConnecting}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-50"
         >
           {isConnecting ? "Conectando..." : "Conectar MetaMask"}
         </button>
@@ -30,7 +30,7 @@ export function ConnectWallet() {
         <span className="h-2 w-2 rounded-full bg-emerald-500" />
         <span className="font-mono text-sm">{shortenAddress(address)}</span>
       </div>
-      <span className="text-xs text-neutral-500">Balance en el DAO: {formatEth(userBalance)}</span>
+      <span className="text-xs text-slate-500">Saldo Personal DAO: {formatEth(userBalance)}</span>
       {!isCorrectChain && (
         <span className="text-xs text-red-500">
           Red incorrecta (conectado a {chainId}, se espera {CHAIN_ID})

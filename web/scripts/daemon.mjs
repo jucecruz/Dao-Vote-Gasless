@@ -47,10 +47,13 @@ async function checkAndExecute() {
   }
 
   const executionDelay = Number(await daoRead.executionDelay());
-  // Use the chain's own clock, not the host machine's — this is what
-  // DAOVoting.executeProposal() itself checks via block.timestamp, and the
-  // two can drift (e.g. a chain fast-forwarded with evm_increaseTime).
-  const now = (await provider.getBlock("latest")).timestamp;
+  // Anvil only mines a new block (and advances block.timestamp) when a
+  // transaction is submitted — with no recent activity "latest" can lag real
+  // time by minutes, making this check miss proposals that are actually
+  // eligible. Wall-clock time is the right proxy here: worst case we try a
+  // moment too early and the contract's own require() rejects it harmlessly,
+  // and the next tick retries.
+  const now = Math.floor(Date.now() / 1000);
   let eligibleCount = 0;
 
   for (const id of ids) {

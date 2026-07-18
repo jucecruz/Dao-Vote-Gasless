@@ -17,6 +17,17 @@ export interface Proposal {
   votesAbstain: bigint;
   executed: boolean;
   proposer: string;
+  description: string;
+}
+
+export interface ExecutionLogEntry {
+  proposalId: bigint;
+  recipient: string;
+  amount: bigint;
+  executor: string;
+  isAutomatic: boolean;
+  txHash: string;
+  timestamp: number;
 }
 
 export type ProposalStatus = "Activa" | "Aprobada" | "Rechazada" | "Ejecutada";
@@ -38,4 +49,20 @@ export function shortenAddress(address: string): string {
 
 export function formatDeadline(deadline: bigint): string {
   return new Date(Number(deadline) * 1000).toLocaleString();
+}
+
+export function timeAgo(timestampSeconds: number): string {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - timestampSeconds);
+  if (diff < 60) return "hace segundos";
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
+  return `hace ${Math.floor(diff / 86400)} d`;
+}
+
+export function formatDuration(seconds: bigint): string {
+  const s = Number(seconds);
+  if (s < 60) return `${s} segundos`;
+  if (s < 3600) return `${Math.round(s / 60)} minutos`;
+  if (s < 86400) return `${Math.round(s / 3600)} horas`;
+  return `${Math.round(s / 86400)} días`;
 }
