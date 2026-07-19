@@ -27,8 +27,9 @@ const VOTE_LABELS: Record<number, string> = {
 
 // DEV/DEMO ONLY — see DaoContext.skipWaitPeriod and
 // app/api/dev/advance-time/route.ts for what this actually does
-// (fast-forwards the local test chain's clock). Shown on any proposal
-// that hasn't been executed yet, regardless of its current status.
+// (fast-forwards the local test chain's clock). Only rendered by
+// ProposalCard while skipping time would actually change something —
+// see the `canSkip` condition there for exactly when that is.
 function SkipWaitButton({ proposalId }: { proposalId: bigint }) {
   const { address } = useWallet();
   const { skipWaitPeriod } = useDao();
@@ -58,6 +59,8 @@ function SkipWaitButton({ proposalId }: { proposalId: bigint }) {
 }
 
 export function ProposalCard({ proposal }: { proposal: ProposalView }) {
+  const { executionDelay } = useDao();
+
   // Ticks every second so the status badge flips from "Activa" to
   // "Aprobada"/"Rechazada" on its own the instant the deadline passes,
   // without needing a fresh on-chain read or a page reload.
@@ -69,6 +72,15 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
   }, []);
 
   const status = getProposalStatus(proposal, now);
+
+  // Only worth showing the "skip wait" shortcut while skipping time would
+  // actually change something: while voting is still open (skips straight
+  // to the deadline), or once approved but still inside the extra security
+  // window (skips straight to being executable). Once rejected — nothing
+  // time can do about that — or already past the security window —
+  // nothing left to skip — the button has no effect, so it's hidden.
+  const canSkip =
+    status === "Activa" || (status === "Aprobada" && now <= Number(proposal.deadline) + Number(executionDelay));
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
@@ -100,11 +112,14 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
           {proposal.votesAbstain.toString()}
         </span>
       </div>
-      {proposal.userVote !== VoteType.None && (
+      {/* Only shown while the proposal is still undecided — once it's
+          Rechazada/Ejecutada the status badge already tells the whole
+          story, so repeating "your vote" here is just clutter. */}
+      {proposal.userVote !== VoteType.None && (status === "Activa" || status === "Aprobada") && (
         <p className="mt-2 text-xs font-medium text-teal-700">Tu voto actual: {VOTE_LABELS[proposal.userVote]}</p>
       )}
       {status === "Activa" && <VoteButtons proposalId={proposal.id} currentVote={proposal.userVote} />}
-      {status !== "Ejecutada" && <SkipWaitButton proposalId={proposal.id} />}
+      {canSkip && <SkipWaitButton proposalId={proposal.id} />}
     </div>
   );
 }

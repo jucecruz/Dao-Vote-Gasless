@@ -15,7 +15,7 @@ import { ExecutionPanel } from "@/components/ExecutionPanel";
 
 export default function Home() {
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-8 px-4 py-10">
+    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-8 px-4 py-10">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">Votación de Propuestas DAO</h1>
         <ConnectWallet />

@@ -239,8 +239,13 @@ export function DaoProvider({ children }: { children: ReactNode }) {
       dao.off("ProposalExecuted", onEvent);
       clearInterval(interval);
     };
+    // Also re-run on `address` alone (not just `dao`), so switching
+    // accounts in MetaMask always tears down the old polling/listeners and
+    // immediately re-fetches with the new address — otherwise a stale
+    // closure could keep showing the *previous* account's data (e.g. its
+    // vote on a proposal) until the next incidental `dao` change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dao]);
+  }, [dao, address]);
 
   // Deposits `amountEth` into the DAO. A normal on-chain transaction — the
   // connected wallet pays its own gas and gets a MetaMask confirmation

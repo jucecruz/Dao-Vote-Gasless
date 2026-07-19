@@ -20,11 +20,15 @@ export function ProposalList() {
     );
   }
 
+  // Always newest-first (highest id first), regardless of the order
+  // DaoContext happens to fetch them in.
+  const sorted = [...proposals].sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
+
   return (
     <section>
       <h2 className="mb-3 text-lg font-semibold text-slate-900">Propuestas</h2>
-      <div className="flex flex-col gap-4">
-        {[...proposals].reverse().map((p) => (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {sorted.map((p) => (
           <ProposalCard key={p.id.toString()} proposal={p} />
         ))}
       </div>

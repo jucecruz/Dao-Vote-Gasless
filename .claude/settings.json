@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(curl -s -X POST -H \"Content-Type: application/json\" --data '{\"proposalId\":\"2\"}' http://localhost:3000/api/dev/advance-time)",
+      "Bash(cast call *)"
+    ]
+  }
+}
