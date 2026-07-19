@@ -1,16 +1,15 @@
 "use client";
 
 // One proposal's card: its details, live status badge, vote tally, and
-// (depending on status) the voting buttons or the dev-only "skip wait"
-// shortcut.
+// (while "Activa") the voting buttons. Dev-only actions like "Saltar
+// espera" live in <ExecutionPanel> instead, so they don't clutter the
+// main voting flow shown here.
 
 import { useEffect, useState } from "react";
-import { useWallet } from "@/context/WalletContext";
 import { ProposalView, useDao } from "@/context/DaoContext";
 import { formatEth, formatDeadline, getProposalStatus, VoteType, ProposalStatus } from "@/lib/format";
-import { useTxStatus } from "@/hooks/useTxStatus";
 import { VoteButtons } from "./VoteButtons";
-import { ThumbsUpIcon, ThumbsDownIcon, MinusCircleIcon, FastForwardIcon } from "./icons";
+import { ThumbsUpIcon, ThumbsDownIcon, MinusCircleIcon } from "./icons";
 
 const STATUS_STYLES: Record<ProposalStatus, string> = {
   Activa: "bg-blue-100 text-blue-700",
@@ -25,62 +24,28 @@ const VOTE_LABELS: Record<number, string> = {
   [VoteType.Abstain]: "Abstención",
 };
 
-// DEV/DEMO ONLY — see DaoContext.skipWaitPeriod and
-// app/api/dev/advance-time/route.ts for what this actually does
-// (fast-forwards the local test chain's clock). Only rendered by
-// ProposalCard while skipping time would actually change something —
-// see the `canSkip` condition there for exactly when that is.
-function SkipWaitButton({ proposalId }: { proposalId: bigint }) {
-  const { address } = useWallet();
-  const { skipWaitPeriod } = useDao();
-  const { state, message, run } = useTxStatus(address);
-
-  const handleSkip = async () => {
-    await run(async () => {
-      await skipWaitPeriod(proposalId);
-      return "Tiempo de espera saltado";
-    });
-  };
-
-  return (
-    <div className="mt-2">
-      <button
-        onClick={handleSkip}
-        disabled={state === "pending"}
-        className="flex items-center gap-1.5 rounded-lg border border-dashed border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
-        title="Solo funciona en una red de pruebas local (Anvil) — adelanta el reloj de la cadena."
-      >
-        <FastForwardIcon className="h-3.5 w-3.5" />
-        {state === "pending" ? "Saltando..." : "Saltar espera (demo local)"}
-      </button>
-      {state === "error" && <p className="mt-1 text-xs text-red-600">{message}</p>}
-    </div>
-  );
-}
-
 export function ProposalCard({ proposal }: { proposal: ProposalView }) {
-  const { executionDelay } = useDao();
+  const { chainTimestamp } = useDao();
 
   // Ticks every second so the status badge flips from "Activa" to
   // "Aprobada"/"Rechazada" on its own the instant the deadline passes,
-  // without needing a fresh on-chain read or a page reload.
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  // without needing a fresh on-chain read or a page reload. Uses
+  // max(reloj del navegador, último timestamp conocido de la cadena):
+  // el reloj real es suficiente en operación normal, pero si se usó
+  // "Saltar espera" (en ExecutionPanel) en OTRA propuesta, eso adelanta
+  // el reloj de toda la cadena — sin este máximo, esta card seguiría
+  // mostrando "Activa" con el reloj real aunque el contrato ya rechace
+  // vote() por "voting closed".
+  const [now, setNow] = useState(() => Math.max(Math.floor(Date.now() / 1000), chainTimestamp));
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    const interval = setInterval(() => {
+      setNow(Math.max(Math.floor(Date.now() / 1000), chainTimestamp));
+    }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [chainTimestamp]);
 
   const status = getProposalStatus(proposal, now);
-
-  // Only worth showing the "skip wait" shortcut while skipping time would
-  // actually change something: while voting is still open (skips straight
-  // to the deadline), or once approved but still inside the extra security
-  // window (skips straight to being executable). Once rejected — nothing
-  // time can do about that — or already past the security window —
-  // nothing left to skip — the button has no effect, so it's hidden.
-  const canSkip =
-    status === "Activa" || (status === "Aprobada" && now <= Number(proposal.deadline) + Number(executionDelay));
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
@@ -119,7 +84,6 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
         <p className="mt-2 text-xs font-medium text-teal-700">Tu voto actual: {VOTE_LABELS[proposal.userVote]}</p>
       )}
       {status === "Activa" && <VoteButtons proposalId={proposal.id} currentVote={proposal.userVote} />}
-      {canSkip && <SkipWaitButton proposalId={proposal.id} />}
     </div>
   );
 }

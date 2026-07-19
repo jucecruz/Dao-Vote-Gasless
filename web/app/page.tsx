@@ -11,6 +11,7 @@ import { HowItWorks } from "@/components/HowItWorks";
 import { FundingPanel } from "@/components/FundingPanel";
 import { CreateProposal } from "@/components/CreateProposal";
 import { ProposalList } from "@/components/ProposalList";
+import { ChainClock } from "@/components/ChainClock";
 import { ExecutionPanel } from "@/components/ExecutionPanel";
 
 export default function Home() {
@@ -29,6 +30,7 @@ export default function Home() {
       <HowItWorks />
 
       <ProposalList />
+      <ChainClock />
       <ExecutionPanel />
     </div>
   );

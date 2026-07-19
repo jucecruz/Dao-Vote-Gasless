@@ -36,6 +36,7 @@ interface DaoContextValue {
   totalBalance: bigint;
   minVoteBalance: bigint;
   executionDelay: bigint;
+  chainTimestamp: number;
   proposals: ProposalView[];
   executionLog: ExecutionLogEntry[];
   isLoading: boolean;
@@ -111,6 +112,16 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   const [totalBalance, setTotalBalance] = useState(0n);
   const [minVoteBalance, setMinVoteBalance] = useState(0n);
   const [executionDelay, setExecutionDelay] = useState(0n);
+  // The chain's own clock (last mined block's timestamp), NOT the
+  // browser's. On a real network the two stay close together, but on a
+  // local Anvil chain they can diverge a lot: `skipWaitPeriod` (see below)
+  // fast-forwards the *entire* chain's clock, which can silently push
+  // *other* still-"active" proposals' deadlines into the past too, from
+  // the contract's point of view. Components combine this with the
+  // browser's clock (see ProposalCard/ExecutionPanel) so proposal status
+  // never looks "Activa" in the UI when voting on it would actually
+  // revert on-chain with "voting closed".
+  const [chainTimestamp, setChainTimestamp] = useState(0);
   const [proposals, setProposals] = useState<ProposalView[]>([]);
   const [executionLog, setExecutionLog] = useState<ExecutionLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -130,6 +141,15 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     setMinVoteBalance(mvb);
     setExecutionDelay(delay);
   }, [dao, address]);
+
+  // Reads the latest block's timestamp directly from the connected
+  // network (via the same signer/provider MetaMask gives us) — this is
+  // the chain's actual "now", independent of the browser's clock.
+  const fetchChainTimestamp = useCallback(async () => {
+    if (!signer?.provider) return;
+    const block = await signer.provider.getBlock("latest");
+    if (block) setChainTimestamp(block.timestamp);
+  }, [signer]);
 
   // The contract has no "list all proposals" view function, so we
   // reconstruct the list by scanning every past `ProposalCreated` event
@@ -202,11 +222,11 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      await Promise.all([fetchBalances(), fetchProposals(), fetchExecutionLog()]);
+      await Promise.all([fetchBalances(), fetchProposals(), fetchExecutionLog(), fetchChainTimestamp()]);
     } finally {
       setIsLoading(false);
     }
-  }, [fetchBalances, fetchProposals, fetchExecutionLog]);
+  }, [fetchBalances, fetchProposals, fetchExecutionLog, fetchChainTimestamp]);
 
   // Keeps the UI live without requiring a manual page reload: subscribes
   // to the DAO's events (so an action from *any* user — another tab,
@@ -218,6 +238,7 @@ export function DaoProvider({ children }: { children: ReactNode }) {
       setTotalBalance(0n);
       setMinVoteBalance(0n);
       setExecutionDelay(0n);
+      setChainTimestamp(0);
       setProposals([]);
       setExecutionLog([]);
       return;
@@ -350,6 +371,7 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     totalBalance,
     minVoteBalance,
     executionDelay,
+    chainTimestamp,
     proposals,
     executionLog,
     isLoading,

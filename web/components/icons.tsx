@@ -71,3 +71,28 @@ export function FastForwardIcon({ className = "h-4 w-4" }: IconProps) {
     </svg>
   );
 }
+
+// Small loading spinner — apply Tailwind's `animate-spin` at the call site
+// (kept out of the icon itself so it's only ever spinning when intended).
+export function SpinnerIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={2} opacity={0.25} />
+      <path
+        d="M21 12a9 9 0 0 0-9-9"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function ClockIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
