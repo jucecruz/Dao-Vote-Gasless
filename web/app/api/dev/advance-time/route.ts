@@ -53,16 +53,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "La propuesta ya fue ejecutada" }, { status: 400 });
     }
 
+    // The exact moment DAOVoting.executeProposal() starts accepting this
+    // proposal (its `block.timestamp > deadline + executionDelay` check).
     const target = Number(proposal.deadline) + Number(executionDelay) + 1;
     const latest = await provider.getBlock("latest");
 
     if (latest && latest.timestamp >= target) {
+      // Nothing to do — real time (or a previous skip) already got us
+      // past this proposal's wait period.
       return NextResponse.json({
         success: true,
         message: "El tiempo ya estaba avanzado, no hizo falta saltar nada",
       });
     }
 
+    // Anvil-only RPC methods: queue up the timestamp the *next* block
+    // should get, then mine that block immediately so it takes effect.
     await provider.send("evm_setNextBlockTimestamp", [target]);
     await provider.send("evm_mine", []);
 

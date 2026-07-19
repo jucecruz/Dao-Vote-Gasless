@@ -1,5 +1,8 @@
 "use client";
 
+// Lists every proposal the DAO has ever had (see DaoContext.fetchProposals
+// for how that list is assembled from on-chain events), newest first.
+
 import { useDao } from "@/context/DaoContext";
 import { ProposalCard } from "./ProposalCard";
 

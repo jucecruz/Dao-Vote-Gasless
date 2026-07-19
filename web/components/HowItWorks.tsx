@@ -1,5 +1,10 @@
 "use client";
 
+// Onboarding guide, collapsed by default so it doesn't compete for
+// attention with the funding/proposal cards. Explains the 4-step flow and
+// lists the DAO's real numeric limits (`minVoteBalance`, `executionDelay`)
+// pulled live from the contract once a wallet is connected.
+
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";
 import { formatEth, formatDuration } from "@/lib/format";
@@ -28,6 +33,10 @@ export function HowItWorks() {
   const { address } = useWallet();
   const { minVoteBalance, executionDelay } = useDao();
 
+  // Before a wallet is connected these values haven't been fetched (see
+  // DaoContext — reads are gated on having a connected address), so we
+  // fall back to generic wording rather than showing "0" as if that were
+  // the DAO's real, deliberately-configured limit.
   const hasLiveValues = !!address && minVoteBalance > 0n && executionDelay > 0n;
 
   return (

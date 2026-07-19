@@ -1,5 +1,12 @@
 "use client";
 
+// The app's central hub for everything DAO-related: reading contract
+// state (balances, proposals, execution history) and every write action
+// a user can take (fund, propose, vote, execute, or the dev-only time
+// skip). Every component that touches the DAO goes through `useDao()`
+// instead of talking to the contracts directly — that keeps all the
+// on-chain read/write logic and polling/refresh behavior in one place.
+
 import {
   createContext,
   useCallback,
@@ -17,6 +24,9 @@ import { ExecutionLogEntry, Proposal, VoteType } from "@/lib/format";
 import daoAbi from "@/lib/abi/DAOVoting.json";
 import forwarderAbi from "@/lib/abi/MinimalForwarder.json";
 
+// A Proposal plus "what did *I* (the connected wallet) vote on this one"
+// — computed per-proposal per-user, so it's kept separate from the raw
+// on-chain Proposal shape.
 export interface ProposalView extends Proposal {
   userVote: VoteType;
 }
@@ -44,6 +54,8 @@ interface DaoContextValue {
 
 const DaoContext = createContext<DaoContextValue | null>(null);
 
+// Shape ethers.js hands back for DAOVoting.getProposal() — matches the
+// Solidity `Proposal` struct field-for-field (see sc/src/DAOVoting.sol).
 interface RawProposal {
   id: bigint;
   recipient: string;
@@ -57,6 +69,10 @@ interface RawProposal {
   description: string;
 }
 
+// Copies the fields we care about out of ethers' raw decoded result into a
+// plain object matching our `Proposal` type (ethers' return value is an
+// array-like "Result" object, not a plain object, so spreading it directly
+// would carry along numeric-index duplicates of every field).
 function toProposal(raw: RawProposal): Proposal {
   return {
     id: raw.id,
@@ -75,6 +91,12 @@ function toProposal(raw: RawProposal): Proposal {
 export function DaoProvider({ children }: { children: ReactNode }) {
   const { signer, address } = useWallet();
 
+  // Contract instances are rebuilt whenever the connected signer changes
+  // (e.g. the user switches accounts in MetaMask) and are `null` while no
+  // wallet is connected — every read/write in this file is gated on that,
+  // which is why the whole app requires connecting a wallet before showing
+  // any DAO data (see the plan's "gate everything behind wallet connection"
+  // decision).
   const dao = useMemo(() => {
     if (!signer || !DAO_ADDRESS) return null;
     return new Contract(DAO_ADDRESS, daoAbi, signer);
@@ -93,6 +115,8 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   const [executionLog, setExecutionLog] = useState<ExecutionLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Reads the connected user's balance plus the two DAO-wide constants
+  // (minVoteBalance, executionDelay) in one batch of parallel calls.
   const fetchBalances = useCallback(async () => {
     if (!dao || !address) return;
     const [ub, tb, mvb, delay] = (await Promise.all([
@@ -107,6 +131,11 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     setExecutionDelay(delay);
   }, [dao, address]);
 
+  // The contract has no "list all proposals" view function, so we
+  // reconstruct the list by scanning every past `ProposalCreated` event
+  // for its id, then fetching each proposal's current (possibly since-
+  // updated) state individually via getProposal(). This also picks up
+  // each proposal's `userVote` for the connected address.
   const fetchProposals = useCallback(async () => {
     if (!dao) return;
     const events = await dao.queryFilter(dao.filters.ProposalCreated());
@@ -131,6 +160,10 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     setProposals(results);
   }, [dao, address]);
 
+  // Same event-scanning approach as fetchProposals, but for
+  // `ProposalExecuted` logs — this builds the "execution log" shown in
+  // <ExecutionPanel>. Each event only carries the block number, so we
+  // fetch the block itself to get a real timestamp for display.
   const fetchExecutionLog = useCallback(async () => {
     if (!dao) return;
     const events = await dao.queryFilter(dao.filters.ProposalExecuted());
@@ -142,6 +175,10 @@ export function DaoProvider({ children }: { children: ReactNode }) {
           }
         ).args;
         const block = await e.getBlock();
+        // Automatic (daemon) executions come from the known relayer
+        // wallet; anything else was triggered manually by a member from
+        // the UI. See DAOVoting's `ProposalExecuted` event — `executor`
+        // is just whichever address happened to call executeProposal().
         const isAutomatic = RELAYER_ADDRESS.length > 0 && args.executor.toLowerCase() === RELAYER_ADDRESS.toLowerCase();
         return {
           proposalId: args.id,
@@ -158,6 +195,10 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     setExecutionLog(entries);
   }, [dao]);
 
+  // Re-fetches everything in parallel. Called after every write action
+  // (so the UI reflects the result immediately) and on a polling
+  // interval / contract-event listeners below (so it also updates when
+  // *other* users' actions change on-chain state).
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -167,6 +208,10 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     }
   }, [fetchBalances, fetchProposals, fetchExecutionLog]);
 
+  // Keeps the UI live without requiring a manual page reload: subscribes
+  // to the DAO's events (so an action from *any* user — another tab,
+  // another person — triggers a refresh here too) and also polls every 8
+  // seconds as a fallback, in case an event notification is ever missed.
   useEffect(() => {
     if (!dao) {
       setUserBalance(0n);
@@ -197,6 +242,9 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dao]);
 
+  // Deposits `amountEth` into the DAO. A normal on-chain transaction — the
+  // connected wallet pays its own gas and gets a MetaMask confirmation
+  // prompt (unlike voting, funding is never gasless).
   const fundDAO = useCallback(
     async (amountEth: string) => {
       if (!dao) throw new Error("Conecta tu wallet primero");
@@ -208,6 +256,10 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     [dao, refresh]
   );
 
+  // Creates a new proposal. Also a normal (non-gasless) transaction — the
+  // contract itself enforces the "≥10% of the DAO" eligibility check, this
+  // function doesn't duplicate that logic, it just surfaces whatever
+  // revert reason comes back if the check fails.
   const createProposal = useCallback(
     async (recipient: string, amountEth: string, deadlineUnix: number, description: string) => {
       if (!dao) throw new Error("Conecta tu wallet primero");
@@ -224,6 +276,11 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     [dao, refresh]
   );
 
+  // The gasless voting flow: sign an off-chain meta-transaction (prompts
+  // MetaMask's *signature* dialog, not a transaction/gas dialog), then
+  // hand it to our own /api/relay endpoint, which submits it on-chain and
+  // pays the gas from the relayer wallet. See lib/metaTx.ts and
+  // app/api/relay/route.ts for the two halves of this flow.
   const voteGasless = useCallback(
     async (proposalId: bigint, voteType: VoteType) => {
       if (!dao || !forwarder || !signer) throw new Error("Conecta tu wallet primero");
@@ -243,6 +300,11 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     [dao, forwarder, signer, refresh]
   );
 
+  // Executes an approved proposal directly from the connected wallet
+  // (paying its own gas) rather than waiting for the background daemon to
+  // pick it up. The contract has no access restriction on who may call
+  // executeProposal(), so this works for any member, not just the
+  // proposer — see DAOVoting.executeProposal in the contract.
   const executeProposalManually = useCallback(
     async (proposalId: bigint) => {
       if (!dao) throw new Error("Conecta tu wallet primero");
@@ -254,6 +316,13 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     [dao, refresh]
   );
 
+  // DEV/DEMO ONLY: fast-forwards the local Anvil chain's clock past a
+  // proposal's voting deadline + execution delay, so its full lifecycle
+  // can be demoed without waiting in real time. Delegates the actual
+  // clock manipulation to a server-side route (app/api/dev/advance-time)
+  // since browser wallets don't expose Anvil's special testing RPC
+  // methods. Does nothing useful against a real network — see that
+  // route's docstring for why.
   const skipWaitPeriod = useCallback(
     async (proposalId: bigint) => {
       const res = await fetch("/api/dev/advance-time", {
@@ -290,6 +359,7 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   return <DaoContext.Provider value={value}>{children}</DaoContext.Provider>;
 }
 
+/** Access DAO state and actions from any component. */
 export function useDao() {
   const ctx = useContext(DaoContext);
   if (!ctx) throw new Error("useDao debe usarse dentro de <DaoProvider>");

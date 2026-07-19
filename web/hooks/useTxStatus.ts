@@ -1,5 +1,11 @@
 "use client";
 
+// Small reusable state machine for "run an async wallet action and show
+// its outcome" — used by every button that funds the DAO, creates/votes
+// on/executes a proposal, etc. (FundingPanel, CreateProposal, VoteButtons,
+// ExecutionPanel, ProposalCard). Keeping this in one hook avoids repeating
+// the same pending/success/error + message plumbing in every component.
+
 import { useCallback, useEffect, useState } from "react";
 import { extractErrorMessage } from "@/lib/errors";
 
@@ -22,6 +28,11 @@ export function useTxStatus(resetKey?: unknown) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(reset, [resetKey]);
 
+  // Wraps an async action (e.g. "sign and send a vote") with the
+  // pending/success/error bookkeeping. `fn` should resolve to the success
+  // message to display (e.g. including a shortened tx hash), or throw/
+  // reject — the thrown error is passed through extractErrorMessage() to
+  // turn ethers' verbose error objects into a readable string.
   const run = useCallback(async (fn: () => Promise<string>) => {
     setState("pending");
     setMessage("");

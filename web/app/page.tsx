@@ -1,3 +1,11 @@
+// The single-page dashboard. A server component (no "use client") that
+// just lays out the client components — all the interactivity/state
+// lives inside them and in the providers wrapping this page (see
+// app/providers.tsx). Order here is also the visual order: funding and
+// proposal creation come first since they're the primary actions, the
+// onboarding guide and proposal list come after, and the admin-ish
+// execution panel is last since it's collapsed by default.
+
 import { ConnectWallet } from "@/components/ConnectWallet";
 import { HowItWorks } from "@/components/HowItWorks";
 import { FundingPanel } from "@/components/FundingPanel";

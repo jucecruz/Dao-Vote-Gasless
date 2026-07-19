@@ -1,5 +1,11 @@
 "use client";
 
+// The three vote buttons shown on an active proposal's card. Clicking one
+// triggers the *gasless* voting flow (DaoContext.voteGasless): the wallet
+// only signs a message, no transaction/gas prompt — see lib/metaTx.ts and
+// app/api/relay/route.ts for how that signature turns into an on-chain
+// vote without the voter paying anything.
+
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";
 import { useTxStatus } from "@/hooks/useTxStatus";
@@ -25,6 +31,9 @@ export function VoteButtons({
   const { userBalance, minVoteBalance, voteGasless } = useDao();
   const { state, message, run } = useTxStatus(address);
 
+  // Mirrors DAOVoting.vote()'s `_balances[voter] >= minVoteBalance` check —
+  // again, purely to disable the buttons early; the contract enforces this
+  // for real.
   const canVote = !!address && userBalance >= minVoteBalance;
 
   const handleVote = (voteType: VoteType) => async () => {

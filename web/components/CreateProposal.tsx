@@ -1,5 +1,11 @@
 "use client";
 
+// Proposal-creation form. Only submittable once the connected wallet
+// meets the DAO's 10%-of-total-balance eligibility bar (mirrors, purely
+// for UX, the `require` check DAOVoting.createProposal enforces on-chain
+// — this client-side check is just to disable the button early and show
+// a clear message; the contract is what actually protects against it).
+
 import { useState, FormEvent } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";
@@ -14,11 +20,16 @@ export function CreateProposal() {
   const [description, setDescription] = useState("");
   const { state, message, run } = useTxStatus(address);
 
+  // Same math as DAOVoting.sol's `_balances[proposer] * 10 >= _totalBalance`
+  // (avoids a division, matching the contract exactly).
   const meetsThreshold = totalBalance > 0n && userBalance * 10n >= totalBalance;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     await run(async () => {
+      // <input type="datetime-local"> gives a local-time string with no
+      // timezone info; `Date` parses it as local time too, so this
+      // conversion to a unix timestamp lines up with the user's own clock.
       const deadlineUnix = Math.floor(new Date(deadline).getTime() / 1000);
       const hash = await createProposal(recipient, amount, deadlineUnix, description);
       setRecipient("");

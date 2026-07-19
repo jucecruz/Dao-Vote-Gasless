@@ -1,3 +1,12 @@
+// Standalone Node process (run with `npm run daemon`, NOT part of the
+// Next.js server) that polls the DAO every DAEMON_INTERVAL_SECONDS and
+// automatically executes any proposal that's approved and past its
+// security delay — see DAOVoting.executeProposal's requirements in
+// sc/src/DAOVoting.sol. This is the "automatic" counterpart to the
+// manual "Ejecutar ahora" button in the frontend's ExecutionPanel; both
+// end up calling the same on-chain function, just from different callers
+// (this script's relayer wallet vs. whichever member clicks the button).
+
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -34,9 +43,16 @@ if (RELAYER_ADDRESS && RELAYER_ADDRESS.toLowerCase() !== relayerWallet.address.t
   process.exit(1);
 }
 
+// Two Contract instances against the same address: `daoRead` for free
+// view calls (no wallet attached), `daoWrite` for the actual
+// executeProposal() transactions, signed by the relayer wallet.
 const daoRead = new Contract(DAO_ADDRESS, daoAbi, provider);
 const daoWrite = new Contract(DAO_ADDRESS, daoAbi, relayerWallet);
 
+// One polling tick: find every proposal, check which ones are ready, and
+// execute those. Mirrors how the frontend lists proposals (DaoContext) —
+// there's no "list all proposals" view function on the contract, so this
+// scans past ProposalCreated events for their ids instead.
 async function checkAndExecute() {
   const events = await daoRead.queryFilter(daoRead.filters.ProposalCreated());
   const ids = [...new Set(events.map((e) => e.args.id))];
@@ -80,6 +96,10 @@ async function checkAndExecute() {
   }
 }
 
+// Infinite poll loop: check, wait, repeat. A failure in one tick (e.g. the
+// RPC node being briefly unreachable) is logged and swallowed rather than
+// crashing the whole process, so the daemon keeps retrying on the next
+// interval instead of needing to be manually restarted.
 async function main() {
   log(`Daemon iniciado. Relayer=${relayerWallet.address}. Intervalo=${INTERVAL_SECONDS}s.`);
   for (;;) {

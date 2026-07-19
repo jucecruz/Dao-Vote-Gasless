@@ -1,5 +1,11 @@
 "use client";
 
+// Deposit form: sends ETH into the DAO via DaoContext.fundDAO(), and shows
+// the connected user's running deposit total next to the DAO's current
+// spendable pool (see the "Saldo Personal DAO" vs "Disponible DAO"
+// distinction explained in DAOVoting.sol's docstring — the two numbers
+// diverge once proposals start spending funds).
+
 import { useState, FormEvent } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";

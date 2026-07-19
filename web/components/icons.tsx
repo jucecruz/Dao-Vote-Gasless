@@ -1,3 +1,7 @@
+// Small hand-drawn SVG icons used throughout the UI. Kept as inline
+// components instead of pulling in an icon library, since `ethers` is the
+// only extra dependency this project needs (see web/README.md).
+
 type IconProps = { className?: string };
 
 export function DepositIcon({ className = "h-4 w-4" }: IconProps) {

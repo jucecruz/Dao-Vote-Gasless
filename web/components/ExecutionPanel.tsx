@@ -1,5 +1,15 @@
 "use client";
 
+// Collapsed-by-default panel (kept out of the way — see the outer
+// <details> below) holding two things:
+//  1. Any proposal that's "Aprobada" (approved by vote), split into ones
+//     that are actually executable right now vs. still inside the extra
+//     safety window (`executionDelay`) — see ExecuteRow / WaitingRow.
+//  2. A collapsible log of every proposal that's already been executed,
+//     labeled "Automática" (the background daemon did it) or "Manual"
+//     (a member clicked "Ejecutar ahora" here) based on who called
+//     executeProposal() on-chain.
+
 import { useEffect, useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";
@@ -7,6 +17,9 @@ import { useTxStatus } from "@/hooks/useTxStatus";
 import { formatEth, getProposalStatus, timeAgo, shortenAddress } from "@/lib/format";
 import { PlayIcon, ChevronDownIcon } from "./icons";
 
+// One approved-and-executable proposal, with a button to execute it
+// directly from the connected wallet (a normal transaction — the caller
+// pays their own gas; this bypasses waiting for the daemon's next poll).
 function ExecuteRow({
   proposalId,
   recipient,
@@ -50,6 +63,10 @@ function ExecuteRow({
   );
 }
 
+// An approved proposal that's not executable *yet* — deadline has passed
+// but the extra `executionDelay` security window hasn't. Read-only; shows
+// a live countdown instead of a button (see the dev-only "skip wait"
+// button on ProposalCard if you need to bypass this for a demo).
 function WaitingRow({
   proposalId,
   recipient,
@@ -88,6 +105,12 @@ export function ExecutionPanel() {
     return () => clearInterval(interval);
   }, []);
 
+  // "Aprobada" (per getProposalStatus) only means the deadline passed and
+  // votesFor > votesAgainst — it does *not* mean executeProposal() would
+  // actually succeed yet, since the contract also enforces the extra
+  // `executionDelay` window on top of the deadline. Split the approved
+  // proposals here so we don't show an "Ejecutar ahora" button that would
+  // just revert with "too early to execute".
   const approved = proposals.filter((p) => getProposalStatus(p, now) === "Aprobada");
   const executable = approved.filter((p) => now > Number(p.deadline) + Number(executionDelay));
   const waiting = approved.filter((p) => now <= Number(p.deadline) + Number(executionDelay));
@@ -137,6 +160,12 @@ export function ExecutionPanel() {
           <p className="text-sm text-slate-500">Todavía no se ejecutó ninguna propuesta.</p>
         ) : (
           <div className="flex flex-col gap-2">
+            {/* Each entry is its own collapsible <details>, nested inside
+                the panel's outer <details>. It's named "group/entry"
+                (rather than the outer's plain "group") so its own chevron
+                only reacts to *this* entry expanding, not to the whole
+                panel opening — Tailwind's `group-open/entry:` scopes the
+                variant to the nearest ancestor named "entry". */}
             {executionLog.map((entry) => (
               <details key={entry.txHash} className="group/entry rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <summary className="flex cursor-pointer list-none items-center justify-between text-sm marker:content-none">

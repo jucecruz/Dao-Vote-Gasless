@@ -18,6 +18,9 @@ export const metadata: Metadata = {
   description: "DAO con votación gasless vía meta-transacciones EIP-2771",
 };
 
+// Server component (Next.js App Router root layout). Wallet/DAO state
+// lives in <Providers>, which wraps every page's content in the client-
+// side context needed to talk to MetaMask and the contracts.
 export default function RootLayout({
   children,
 }: Readonly<{

@@ -1,5 +1,9 @@
 "use client";
 
+// One proposal's card: its details, live status badge, vote tally, and
+// (depending on status) the voting buttons or the dev-only "skip wait"
+// shortcut.
+
 import { useEffect, useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { ProposalView, useDao } from "@/context/DaoContext";
@@ -21,6 +25,10 @@ const VOTE_LABELS: Record<number, string> = {
   [VoteType.Abstain]: "Abstención",
 };
 
+// DEV/DEMO ONLY — see DaoContext.skipWaitPeriod and
+// app/api/dev/advance-time/route.ts for what this actually does
+// (fast-forwards the local test chain's clock). Shown on any proposal
+// that hasn't been executed yet, regardless of its current status.
 function SkipWaitButton({ proposalId }: { proposalId: bigint }) {
   const { address } = useWallet();
   const { skipWaitPeriod } = useDao();
@@ -50,6 +58,9 @@ function SkipWaitButton({ proposalId }: { proposalId: bigint }) {
 }
 
 export function ProposalCard({ proposal }: { proposal: ProposalView }) {
+  // Ticks every second so the status badge flips from "Activa" to
+  // "Aprobada"/"Rechazada" on its own the instant the deadline passes,
+  // without needing a fresh on-chain read or a page reload.
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {

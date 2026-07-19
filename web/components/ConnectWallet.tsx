@@ -1,5 +1,9 @@
 "use client";
 
+// Header widget: shows a "Connect MetaMask" button when no wallet is
+// connected, or the connected address + the user's DAO balance once it
+// is. Also warns if MetaMask is pointed at the wrong network.
+
 import { useWallet } from "@/context/WalletContext";
 import { useDao } from "@/context/DaoContext";
 import { shortenAddress, formatEth } from "@/lib/format";
