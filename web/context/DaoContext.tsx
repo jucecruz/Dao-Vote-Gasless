@@ -21,6 +21,7 @@ import { useWallet } from "./WalletContext";
 import { DAO_ADDRESS, FORWARDER_ADDRESS, RELAYER_ADDRESS } from "@/lib/config";
 import { signVoteRequest } from "@/lib/metaTx";
 import { ExecutionLogEntry, Proposal, VoteType } from "@/lib/format";
+import { getDeploymentBlock, queryFilterPaginated } from "@/lib/blockRange";
 import daoAbi from "@/lib/abi/DAOVoting.json";
 import forwarderAbi from "@/lib/abi/MinimalForwarder.json";
 
@@ -156,9 +157,20 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   // for its id, then fetching each proposal's current (possibly since-
   // updated) state individually via getProposal(). This also picks up
   // each proposal's `userVote` for the connected address.
+  //
+  // The scan is bounded to [deployment block, latest] and chunked (see
+  // lib/blockRange.ts) instead of a bare `queryFilter(filter)` — on a
+  // real network like Sepolia an unbounded range (0 to latest, which is
+  // ~11.3M blocks) gets rejected outright by RPC providers that cap
+  // eth_getLogs. See ISSUES.md.
   const fetchProposals = useCallback(async () => {
-    if (!dao) return;
-    const events = await dao.queryFilter(dao.filters.ProposalCreated());
+    if (!dao || !signer?.provider) return;
+    const provider = signer.provider;
+    const [fromBlock, toBlock] = await Promise.all([
+      getDeploymentBlock(provider, DAO_ADDRESS),
+      provider.getBlockNumber(),
+    ]);
+    const events = await queryFilterPaginated(dao, dao.filters.ProposalCreated(), fromBlock, toBlock);
     const ids = Array.from(
       new Set(
         events.map((e) => {
@@ -178,15 +190,21 @@ export function DaoProvider({ children }: { children: ReactNode }) {
       })
     );
     setProposals(results);
-  }, [dao, address]);
+  }, [dao, address, signer]);
 
   // Same event-scanning approach as fetchProposals, but for
   // `ProposalExecuted` logs — this builds the "execution log" shown in
   // <ExecutionPanel>. Each event only carries the block number, so we
-  // fetch the block itself to get a real timestamp for display.
+  // fetch the block itself to get a real timestamp for display. Bounded
+  // + chunked for the same reason as fetchProposals above.
   const fetchExecutionLog = useCallback(async () => {
-    if (!dao) return;
-    const events = await dao.queryFilter(dao.filters.ProposalExecuted());
+    if (!dao || !signer?.provider) return;
+    const provider = signer.provider;
+    const [fromBlock, toBlock] = await Promise.all([
+      getDeploymentBlock(provider, DAO_ADDRESS),
+      provider.getBlockNumber(),
+    ]);
+    const events = await queryFilterPaginated(dao, dao.filters.ProposalExecuted(), fromBlock, toBlock);
     const entries = await Promise.all(
       events.map(async (e) => {
         const args = (
@@ -213,7 +231,7 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     );
     entries.sort((a, b) => b.timestamp - a.timestamp);
     setExecutionLog(entries);
-  }, [dao]);
+  }, [dao, signer]);
 
   // Re-fetches everything in parallel. Called after every write action
   // (so the UI reflects the result immediately) and on a polling

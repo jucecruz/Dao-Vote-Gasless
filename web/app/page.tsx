@@ -30,7 +30,7 @@ export default function Home() {
       <HowItWorks />
 
       <ProposalList />
-      <ChainClock />
+      {/* <ChainClock /> */}
       <ExecutionPanel />
     </div>
   );

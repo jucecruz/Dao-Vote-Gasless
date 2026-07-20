@@ -25,6 +25,51 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
+// Same range-limit workaround as web/lib/blockRange.ts (duplicated here
+// rather than imported, consistent with this script's existing pattern of
+// loading its own copy of the ABI — this is a standalone Node process, not
+// part of the Next.js build). Unbounded eth_getLogs (fromBlock=0) is fine
+// on Anvil but gets rejected outright on Sepolia/mainnet once the range
+// exceeds the RPC provider's cap (commonly ~10,000 blocks). See ISSUES.md.
+const MAX_BLOCK_RANGE = 9_000;
+const deploymentBlockCache = new Map();
+
+async function getDeploymentBlock(provider, address) {
+  const cached = deploymentBlockCache.get(address);
+  if (cached !== undefined) return cached;
+
+  const latest = await provider.getBlockNumber();
+  if ((await provider.getCode(address, 0)) !== "0x") {
+    deploymentBlockCache.set(address, 0);
+    return 0;
+  }
+
+  let lo = 0;
+  let hi = latest;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const code = await provider.getCode(address, mid);
+    if (code === "0x") {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  deploymentBlockCache.set(address, lo);
+  return lo;
+}
+
+async function queryFilterPaginated(contract, filter, fromBlock, toBlock) {
+  const results = [];
+  for (let start = fromBlock; start <= toBlock; start += MAX_BLOCK_RANGE + 1) {
+    const end = Math.min(start + MAX_BLOCK_RANGE, toBlock);
+    const chunk = await contract.queryFilter(filter, start, end);
+    results.push(...chunk);
+  }
+  return results;
+}
+
 if (!DAO_ADDRESS || !RPC_URL || !RELAYER_PRIVATE_KEY) {
   console.error("Faltan NEXT_PUBLIC_DAO_ADDRESS, RPC_URL o RELAYER_PRIVATE_KEY en el entorno.");
   process.exit(1);
@@ -54,7 +99,11 @@ const daoWrite = new Contract(DAO_ADDRESS, daoAbi, relayerWallet);
 // there's no "list all proposals" view function on the contract, so this
 // scans past ProposalCreated events for their ids instead.
 async function checkAndExecute() {
-  const events = await daoRead.queryFilter(daoRead.filters.ProposalCreated());
+  const [fromBlock, toBlock] = await Promise.all([
+    getDeploymentBlock(provider, DAO_ADDRESS),
+    provider.getBlockNumber(),
+  ]);
+  const events = await queryFilterPaginated(daoRead, daoRead.filters.ProposalCreated(), fromBlock, toBlock);
   const ids = [...new Set(events.map((e) => e.args.id))];
 
   if (ids.length === 0) {
