@@ -91,6 +91,15 @@ export function useMetaMask() {
     // from the resulting extra background polling) — reusing one instance
     // fixes that at the source.
     const browserProvider = new BrowserProvider(ethereum);
+    // ethers v6 providers poll for new blocks in the background on their
+    // own (default: every 4s), independently of anything this app calls
+    // explicitly — used internally for e.g. tx.wait() and block-tag
+    // resolution. That's a second, hidden source of constant RPC traffic
+    // on top of DaoContext's own 20s refresh loop, and was still tripping
+    // rate limits after removing the dao.on(...) event subscriptions.
+    // Slowing it down to match our own refresh cadence removes that
+    // hidden load without losing any functionality we actually use.
+    browserProvider.pollingInterval = 20000;
     setProvider(browserProvider);
 
     // Reconnect silently if the site is already authorized from a previous session.

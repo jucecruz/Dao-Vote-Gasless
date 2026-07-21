@@ -312,3 +312,53 @@ carga de RPC por cada pestaña abierta y cada evento suscrito.
 2. Crear una propuesta y confirmar que aparece en la lista dentro de los
    20s siguientes, sin errores `Request is being rate limited` en
    consola bajo uso normal (una pestaña, un usuario).
+
+## `Request is being rate limited` persiste tras quitar `dao.on(...)` — polling interno de `BrowserProvider`
+
+**Estado:** Corregido.
+
+### Síntoma
+
+Incluso después del fix anterior (quitar las suscripciones `dao.on(...)`)
+y con un RPC dedicado (Infura propio, no el público), seguía apareciendo
+`Request is being rate limited` (`code: -32005`) de forma continua,
+incluyendo en llamadas normales como `getUserVote` (que fallaba con
+`missing revert data` como efecto colateral de la saturación, no porque
+el voto en sí fuera inválido). En el stack de la consola se veía
+`eth_blockNumber` disparándose dentro de un `setInterval` — un patrón
+que no correspondía a ningún `setInterval` del código de la app (el
+único que queda es el `refresh()` cada 20s, que no llama
+`getBlockNumber()` de forma aislada).
+
+### Causa raíz
+
+Los providers de ethers v6 (`BrowserProvider` incluido) hacen **polling
+de bloques nuevos en segundo plano por cuenta propia**, con un
+`pollingInterval` por defecto de **4000ms** — independiente de cualquier
+`.on(...)` explícito del código de la app. Ethers usa este poller
+internamente para cosas como `tx.wait()` y la resolución de "block tags",
+y arranca solo, sin que el desarrollador tenga que suscribirse a nada.
+Ese poller de fondo, sumado al `setInterval(refresh, 20000)` propio de
+`DaoContext`, era una segunda fuente de tráfico constante hacia el RPC
+que el fix anterior no cubría — y por sí sola bastaba para seguir
+agotando el límite de peticiones por segundo.
+
+### Dónde se origina
+
+- [`web/hooks/useMetaMask.ts`](web/hooks/useMetaMask.ts) — creación del `BrowserProvider` (`pollingInterval` nunca configurado, quedaba en el default de la librería).
+
+### Corrección implementada
+
+Se fija `browserProvider.pollingInterval = 20000` justo después de crear
+la instancia única de `BrowserProvider` (ver el issue anterior sobre por
+qué solo hay una instancia por sesión) — alineando el polling interno de
+ethers con la misma cadencia de 20s que ya usa el resto de la app, en vez
+de dejarlo en su default de 4s.
+
+### Cómo verificar
+
+1. Con el fix desplegado, dejar la pestaña abierta un par de minutos con
+   DevTools → Network filtrando por `eth_blockNumber`: las llamadas
+   deberían espaciarse ~20s, no ~4s.
+2. Votar en una propuesta y confirmar que no aparece `missing revert
+   data`/`Request is being rate limited` en consola bajo uso normal.
