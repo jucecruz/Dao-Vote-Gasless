@@ -87,3 +87,91 @@ pequeño).
    la consola del navegador que no aparece el error `eth_getLogs range ...
    exceeds limit`, y que las propuestas y el log de ejecuciones cargan
    correctamente.
+
+## Votar falla con `execution reverted` / `missing revert data` en producción (Sepolia)
+
+**Estado:** Corregido.
+
+### Síntoma
+
+En el dashboard desplegado en Vercel, conectado a Sepolia por MetaMask, al
+votar ("A favor" / "En contra" / "Abstención") nunca aparecía el popup de
+firma de MetaMask. En su lugar, la consola mostraba varios errores
+encadenados:
+
+```
+MetaMask - RPC Error: execution reverted {code: 3, data: {cause: null}, ...}
+MetaMask - RPC Error: RPC endpoint returned too many errors, retrying in 0,43 minutes.
+Uncaught (in promise) Error: could not coalesce error ...
+MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 close listeners added.
+ObjectMultiplex - orphaned data for stream "app-init-liveness" / "background-liveness"
+```
+
+### Causa raíz
+
+Dos problemas distintos que se combinaban para producir este cuadro:
+
+1. **Falso positivo del contrato/red.** El primer sospechoso natural —
+   direcciones de contrato mal configuradas — se descartó verificando
+   directamente contra Sepolia (`eth_getCode` y `cast call` sobre
+   `DAOVoting` y `MinimalForwarder`): ambos contratos están bien
+   desplegados, con el `trustedForwarder` correcto grabado como
+   `immutable`, y `getNonce(address)` responde sin problema por RPC
+   directo. El error real no estaba en el contrato ni en las direcciones.
+
+2. **Causa real: fuga de listeners en `useMetaMask`, que termina saturando
+   el RPC compartido de MetaMask.** [`web/hooks/useMetaMask.ts`](web/hooks/useMetaMask.ts)
+   creaba una **`BrowserProvider` nueva** cada vez que MetaMask disparaba
+   `accountsChanged` o `chainChanged` (es decir, cada vez que se cambiaba
+   de cuenta o de red):
+   ```ts
+   const handleChange = () => {
+     const p = new BrowserProvider(ethereum); // nueva instancia cada vez
+     setProvider(p);
+     refresh(p);
+   };
+   ```
+   Cada `BrowserProvider` envuelve el mismo `window.ethereum` (el
+   `EventEmitter` interno de la extensión) y engancha sus propios
+   listeners para detectar cambios de red. Como las instancias viejas se
+   descartaban sin ninguna limpieza, cada cambio de cuenta dejaba un set
+   de listeners huérfano enganchado permanentemente a `window.ethereum` —
+   de ahí el aviso de la propia extensión, `MaxListenersExceededWarning:
+   11 close listeners added` (uno por cada cambio de cuenta/red probado
+   en la sesión). Esos listeners huérfanos añaden polling de fondo extra
+   sobre la conexión de MetaMask con su RPC, y sumado al polling propio
+   de la app (`DaoContext` refrescaba cada 8s, más el polling interno de
+   ethers para cada `dao.on(...)`), terminaba saturando el endpoint RPC
+   compartido que trae MetaMask por defecto para Sepolia — que entonces
+   entra en modo backoff (`RPC endpoint returned too many errors,
+   retrying...`) y devuelve respuestas corruptas/vacías a llamadas
+   normales como `getNonce`, viéndose como un revert del contrato aunque
+   no lo era.
+
+### Dónde se origina
+
+- [`web/hooks/useMetaMask.ts`](web/hooks/useMetaMask.ts) — `connect()` y el `handleChange` del efecto de `accountsChanged`/`chainChanged`.
+- [`web/context/DaoContext.tsx`](web/context/DaoContext.tsx) — intervalo de refresco (contribuía al volumen de tráfico, no a la fuga en sí).
+
+### Corrección implementada
+
+- `useMetaMask.ts`: se crea **una sola `BrowserProvider` por sesión de
+  página**, en el efecto de montaje, y se reutiliza tanto en `connect()`
+  como en cada `accountsChanged`/`chainChanged` — en vez de instanciar una
+  nueva cada vez.
+- `DaoContext.tsx`: el intervalo de refresco de respaldo se subió de 8s a
+  20s — los listeners de eventos del contrato ya mantienen la UI casi en
+  tiempo real, así que el intervalo solo hace falta como red de
+  seguridad ante un evento perdido, no necesita ser agresivo. Cada
+  pestaña abierta corre este ciclo de forma independiente, así que un
+  intervalo más corto multiplica la carga de RPC con cada usuario
+  concurrente.
+
+### Cómo verificar
+
+1. Con el fix desplegado, conectar MetaMask a Sepolia y cambiar de cuenta
+   varias veces seguidas (`accountsChanged`) — la consola no debería
+   acumular `MaxListenersExceededWarning` con un conteo creciente.
+2. Votar en una propuesta activa desde una cuenta con saldo depositado
+   ≥ `minVoteBalance`: debería aparecer el popup de firma de MetaMask sin
+   errores previos de `execution reverted`/`missing revert data`.

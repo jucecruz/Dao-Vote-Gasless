@@ -269,7 +269,13 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     dao.on("VoteCast", onEvent);
     dao.on("ProposalExecuted", onEvent);
 
-    const interval = setInterval(refresh, 8000);
+    // 20s rather than a more aggressive value — the event listeners above
+    // already keep the UI near-real-time for anything that happens while
+    // the tab is open; this interval only exists as a fallback for missed
+    // events, so it doesn't need to be tight. Every open tab runs this
+    // loop independently, so a shorter interval multiplies RPC load with
+    // every concurrent user.
+    const interval = setInterval(refresh, 20000);
 
     return () => {
       dao.off("Funded", onEvent);

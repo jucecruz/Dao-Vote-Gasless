@@ -52,6 +52,10 @@ export function useMetaMask() {
   // Triggers MetaMask's "connect" popup. Only needs to be called once per
   // browser session — after the user approves, `window.ethereum` remembers
   // the authorization and the effect below reconnects silently on reload.
+  //
+  // Reuses the single `BrowserProvider` created by the effect below instead
+  // of constructing a new one here — see that effect's comment for why a
+  // fresh instance per call is a real problem, not just wasted allocation.
   const connect = useCallback(async () => {
     if (typeof window === "undefined" || !window.ethereum) {
       setError("MetaMask no está instalado");
@@ -60,39 +64,45 @@ export function useMetaMask() {
     setIsConnecting(true);
     setError(null);
     try {
-      const browserProvider = new BrowserProvider(window.ethereum);
+      const browserProvider = provider ?? new BrowserProvider(window.ethereum);
       await browserProvider.send("eth_requestAccounts", []);
-      setProvider(browserProvider);
+      if (!provider) setProvider(browserProvider);
       await refresh(browserProvider);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo conectar la wallet");
     } finally {
       setIsConnecting(false);
     }
-  }, [refresh]);
+  }, [refresh, provider]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.ethereum) return;
     const ethereum = window.ethereum;
 
+    // A single `BrowserProvider` for the whole session, reused by every
+    // refresh — not recreated per account/network change. Each `new
+    // BrowserProvider(ethereum)` wraps the *same* underlying
+    // `window.ethereum` EventEmitter and attaches its own internal
+    // listeners to it for network detection; ethers has no way to know an
+    // older instance was discarded, so those listeners were never removed.
+    // Switching accounts/networks repeatedly during testing used to leak
+    // one full set of listeners per switch (visible in the console as
+    // MetaMask's own "MaxListenersExceededWarning" and RPC instability
+    // from the resulting extra background polling) — reusing one instance
+    // fixes that at the source.
+    const browserProvider = new BrowserProvider(ethereum);
+    setProvider(browserProvider);
+
     // Reconnect silently if the site is already authorized from a previous session.
-    const initialProvider = new BrowserProvider(ethereum);
-    initialProvider.listAccounts().then((accounts) => {
-      if (accounts.length > 0) {
-        setProvider(initialProvider);
-        refresh(initialProvider);
-      }
+    browserProvider.listAccounts().then((accounts) => {
+      if (accounts.length > 0) refresh(browserProvider);
     });
 
     // MetaMask fires these events when the user switches accounts or
     // networks in the extension UI, *without* reloading the page — without
     // this listener the app would keep showing stale wallet/chain info
     // until a manual refresh.
-    const handleChange = () => {
-      const p = new BrowserProvider(ethereum);
-      setProvider(p);
-      refresh(p);
-    };
+    const handleChange = () => refresh(browserProvider);
 
     ethereum.on("accountsChanged", handleChange);
     ethereum.on("chainChanged", handleChange);
