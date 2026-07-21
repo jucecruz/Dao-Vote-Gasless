@@ -36,10 +36,27 @@ export async function getDeploymentBlock(provider: Provider, address: string): P
 
   const latest = await provider.getBlockNumber();
 
+  // Many free/public RPC endpoints (unlike Infura/Alchemy) aren't archive
+  // nodes — they only keep recent state and throw ("historical state ...
+  // is not available") for eth_getCode at an old block instead of just
+  // answering "0x". A thrown error here doesn't mean "no code" or "has
+  // code", it means "this node can't tell us" — the search below treats
+  // that as an upper bound on how far back we can usefully search, rather
+  // than letting it crash the whole lookup (which used to take down
+  // fetchProposals/fetchExecutionLog with it).
+  const codeAt = async (block: number): Promise<string | null> => {
+    try {
+      return await provider.getCode(address, block);
+    } catch {
+      return null;
+    }
+  };
+
   // Guards against the (very unlikely) case of a chain whose genesis
   // block already has this contract's code — a plain binary search would
   // never terminate correctly if `lo` itself is already a valid answer.
-  if ((await provider.getCode(address, 0)) !== "0x") {
+  const genesisCode = await codeAt(0);
+  if (genesisCode !== null && genesisCode !== "0x") {
     deploymentBlockCache.set(address, 0);
     return 0;
   }
@@ -48,8 +65,12 @@ export async function getDeploymentBlock(provider: Provider, address: string): P
   let hi = latest;
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
-    const code = await provider.getCode(address, mid);
-    if (code === "0x") {
+    const code = await codeAt(mid);
+    if (code === null) {
+      // Node can't see this far back — narrow toward the oldest block it
+      // *can* answer for, instead of assuming either side of the range.
+      hi = mid;
+    } else if (code === "0x") {
       lo = mid + 1;
     } else {
       hi = mid;

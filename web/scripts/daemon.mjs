@@ -34,12 +34,25 @@ function log(msg) {
 const MAX_BLOCK_RANGE = 9_000;
 const deploymentBlockCache = new Map();
 
+// Non-archive RPC nodes throw on eth_getCode for old blocks instead of
+// just answering "0x" — treated as "can't tell", not "no code" (see the
+// matching comment in web/lib/blockRange.ts for the full rationale).
+async function codeAt(provider, address, block) {
+  try {
+    return await provider.getCode(address, block);
+  } catch {
+    return null;
+  }
+}
+
 async function getDeploymentBlock(provider, address) {
   const cached = deploymentBlockCache.get(address);
   if (cached !== undefined) return cached;
 
   const latest = await provider.getBlockNumber();
-  if ((await provider.getCode(address, 0)) !== "0x") {
+
+  const genesisCode = await codeAt(provider, address, 0);
+  if (genesisCode !== null && genesisCode !== "0x") {
     deploymentBlockCache.set(address, 0);
     return 0;
   }
@@ -48,8 +61,10 @@ async function getDeploymentBlock(provider, address) {
   let hi = latest;
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
-    const code = await provider.getCode(address, mid);
-    if (code === "0x") {
+    const code = await codeAt(provider, address, mid);
+    if (code === null) {
+      hi = mid;
+    } else if (code === "0x") {
       lo = mid + 1;
     } else {
       hi = mid;

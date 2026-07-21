@@ -109,7 +109,8 @@ ObjectMultiplex - orphaned data for stream "app-init-liveness" / "background-liv
 
 ### Causa raíz
 
-Dos problemas distintos que se combinaban para producir este cuadro:
+Dos problemas distintos que se combinaban para producir este cuadro — y uno
+más que parecía relacionado pero no lo estaba (ver nota al final):
 
 1. **Falso positivo del contrato/red.** El primer sospechoso natural —
    direcciones de contrato mal configuradas — se descartó verificando
@@ -119,34 +120,35 @@ Dos problemas distintos que se combinaban para producir este cuadro:
    `immutable`, y `getNonce(address)` responde sin problema por RPC
    directo. El error real no estaba en el contrato ni en las direcciones.
 
-2. **Causa real: fuga de listeners en `useMetaMask`, que termina saturando
-   el RPC compartido de MetaMask.** [`web/hooks/useMetaMask.ts`](web/hooks/useMetaMask.ts)
-   creaba una **`BrowserProvider` nueva** cada vez que MetaMask disparaba
-   `accountsChanged` o `chainChanged` (es decir, cada vez que se cambiaba
-   de cuenta o de red):
-   ```ts
-   const handleChange = () => {
-     const p = new BrowserProvider(ethereum); // nueva instancia cada vez
-     setProvider(p);
-     refresh(p);
-   };
-   ```
-   Cada `BrowserProvider` envuelve el mismo `window.ethereum` (el
-   `EventEmitter` interno de la extensión) y engancha sus propios
-   listeners para detectar cambios de red. Como las instancias viejas se
-   descartaban sin ninguna limpieza, cada cambio de cuenta dejaba un set
-   de listeners huérfano enganchado permanentemente a `window.ethereum` —
-   de ahí el aviso de la propia extensión, `MaxListenersExceededWarning:
-   11 close listeners added` (uno por cada cambio de cuenta/red probado
-   en la sesión). Esos listeners huérfanos añaden polling de fondo extra
-   sobre la conexión de MetaMask con su RPC, y sumado al polling propio
-   de la app (`DaoContext` refrescaba cada 8s, más el polling interno de
-   ethers para cada `dao.on(...)`), terminaba saturando el endpoint RPC
-   compartido que trae MetaMask por defecto para Sepolia — que entonces
-   entra en modo backoff (`RPC endpoint returned too many errors,
-   retrying...`) y devuelve respuestas corruptas/vacías a llamadas
-   normales como `getNonce`, viéndose como un revert del contrato aunque
-   no lo era.
+2. **Causa real: demasiado polling de fondo saturaba el RPC compartido de
+   MetaMask.** `DaoContext` refrescaba cada 8s, más el polling interno
+   que ethers arma automáticamente para cada `dao.on(...)` — ese volumen
+   de tráfico, sumado al de cualquier otra pestaña abierta, termina
+   saturando el endpoint RPC compartido/gratuito que trae MetaMask por
+   defecto para Sepolia. Al saturarse entra en modo backoff (`RPC
+   endpoint returned too many errors, retrying...`) y empieza a devolver
+   respuestas corruptas/vacías a llamadas normales como `getNonce`,
+   viéndose como un revert del contrato aunque no lo era.
+
+   De paso se corrigió también [`web/hooks/useMetaMask.ts`](web/hooks/useMetaMask.ts),
+   que creaba una **`BrowserProvider` nueva** cada vez que MetaMask
+   disparaba `accountsChanged`/`chainChanged` en vez de reutilizar una
+   sola instancia — esto sumaba tráfico y objetos de más en cada cambio
+   de cuenta, aunque **no** es la causa del warning de `contentscript.js`
+   descrito abajo (esa parte quedó aclarada tras el fix).
+
+> **Nota — el `MaxListenersExceededWarning: 11 close/end listeners`
+> visto en consola es un artefacto propio de la extensión de MetaMask**
+> (`contentscript.js`/`inpage.js`/`ObjectMultiplex`, todo código interno
+> de la extensión, no del bundle de la app), no algo que el código de
+> este proyecto cause o pueda arreglar. Se confirmó porque el conteo
+> (11) se mantuvo **idéntico antes y después** del fix de
+> `useMetaMask.ts` — si la fuga viniera de la app, el número debería
+> haber crecido con cada acción nueva. Es un mensaje cosmético,
+> ampliamente reportado en otros dApps, y no indica que el problema de
+> saturación de RPC siga sin resolver — para eso hay que mirar si
+> reaparecen `RPC endpoint returned too many errors` o `execution
+> reverted` al votar, no este warning puntual.
 
 ### Dónde se origina
 
@@ -175,3 +177,79 @@ Dos problemas distintos que se combinaban para producir este cuadro:
 2. Votar en una propuesta activa desde una cuenta con saldo depositado
    ≥ `minVoteBalance`: debería aparecer el popup de firma de MetaMask sin
    errores previos de `execution reverted`/`missing revert data`.
+
+## `historical state ... is not available` al crear/refrescar propuestas con un RPC público no-archive
+
+**Estado:** Corregido.
+
+### Síntoma
+
+Tras cambiar el RPC de Sepolia en MetaMask a un endpoint público
+(`ethereum-sepolia-rpc.publicnode.com`, para evitar la saturación del
+endpoint compartido de MetaMask — ver issue anterior), dejó de funcionar
+"Crear propuesta": el formulario mostraba `could not coalesce error` en
+rojo y la lista de propuestas quedaba vacía ("Todavía no hay
+propuestas"), aunque antes (con el RPC de Infura propio del proyecto) sí
+funcionaba. En la consola:
+
+```
+MetaMask - RPC Error: Internal JSON-RPC error.
+{code: -32603, message: 'Internal JSON-RPC error.', data: {
+  code: -32000,
+  message: "historical state ... is not available",
+  ...
+}}
+payload: { method: "eth_getCode", params: ["0x474eB90F...", "0x0"] }
+Uncaught (in promise) Error: could not coalesce error ...
+```
+
+### Causa raíz
+
+Bug introducido por el propio fix del primer issue de este documento
+(`eth_getLogs range ... exceeds limit`). `getDeploymentBlock()` (en
+[`web/lib/blockRange.ts`](web/lib/blockRange.ts)) busca el bloque de
+despliegue del contrato con una búsqueda binaria sobre `eth_getCode` en
+bloques arbitrarios, incluyendo el bloque `0`. Eso asume que el nodo RPC
+puede responder `eth_getCode` para **cualquier** bloque del historial —
+válido para Infura/Alchemy (que sirven estado histórico completo por
+defecto), pero **no** para muchos RPCs públicos gratuitos como
+`publicnode.com`, que solo son nodos "full" (guardan estado reciente, no
+archive) y devuelven un error en vez de una respuesta para bloques viejos.
+
+`getDeploymentBlock()` no capturaba ese error, así que la búsqueda binaria
+completa (y con ella `fetchProposals()`/`fetchExecutionLog()`) fallaba en
+cuanto tocaba un bloque fuera del rango que ese nodo podía servir. Y como
+`createProposal()`/`fundDAO()`/`executeProposalManually()` hacen
+`await refresh()` inmediatamente después de `tx.wait()` sin capturar
+errores, ese fallo del refresco de fondo se propagaba hacia arriba y
+hacía que la acción completa se reportara como fallida en la UI —
+aunque la transacción en sí ya se hubiera confirmado on-chain.
+
+### Dónde se origina
+
+- [`web/lib/blockRange.ts`](web/lib/blockRange.ts) — `getDeploymentBlock()`.
+- [`web/scripts/daemon.mjs`](web/scripts/daemon.mjs) — copia duplicada de la misma búsqueda.
+- [`web/context/DaoContext.tsx`](web/context/DaoContext.tsx) — `refresh()`, y las acciones de escritura (`fundDAO`, `createProposal`, `executeProposalManually`) que dependen de que no lance.
+
+### Corrección implementada
+
+- `getDeploymentBlock()` (en ambos archivos) ahora envuelve cada
+  `eth_getCode` en un try/catch: si el nodo no puede responder para un
+  bloque (nodo no-archive), se trata como "no lo sé" y la búsqueda binaria
+  converge hacia el bloque más antiguo que el nodo sí pueda servir, en vez
+  de reventar. En el peor caso (RPC con muy poca ventana de historial)
+  esto puede hacer que `fromBlock` quede un poco más reciente de lo ideal
+  — pero eventos anteriores a esa ventana son, de todas formas,
+  irrecuperables a través de ese nodo por más que se busque.
+- `DaoContext.tsx`: `refresh()` ahora atrapa sus propios errores
+  (`console.warn` en vez de dejarlos propagar). Un refresco de fondo
+  fallido ya no hace que una transacción real y exitosa (depositar, crear
+  propuesta, votar, ejecutar) se reporte como error en la UI.
+
+### Cómo verificar
+
+1. Configurar MetaMask con un RPC de Sepolia público y no-archive (por
+   ejemplo `https://ethereum-sepolia-rpc.publicnode.com`).
+2. Crear una propuesta: debe confirmar y aparecer en la lista sin mostrar
+   `could not coalesce error`, incluso si en la consola aparece algún
+   `console.warn` de refresco (no bloqueante).

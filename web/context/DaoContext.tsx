@@ -237,10 +237,19 @@ export function DaoProvider({ children }: { children: ReactNode }) {
   // (so the UI reflects the result immediately) and on a polling
   // interval / contract-event listeners below (so it also updates when
   // *other* users' actions change on-chain state).
+  //
+  // Swallows its own errors (logging instead of throwing) rather than
+  // letting a transient RPC hiccup propagate — write actions below do
+  // `await tx.wait(); await refresh();`, and a real on-chain transaction
+  // that already succeeded shouldn't get reported to the user as failed
+  // just because the follow-up read (e.g. against a non-archive RPC node
+  // that can't serve some historical query) happened to fail.
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
       await Promise.all([fetchBalances(), fetchProposals(), fetchExecutionLog(), fetchChainTimestamp()]);
+    } catch (err) {
+      console.warn("No se pudo refrescar el estado del DAO:", err);
     } finally {
       setIsLoading(false);
     }
