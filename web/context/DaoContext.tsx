@@ -255,10 +255,20 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     }
   }, [fetchBalances, fetchProposals, fetchExecutionLog, fetchChainTimestamp]);
 
-  // Keeps the UI live without requiring a manual page reload: subscribes
-  // to the DAO's events (so an action from *any* user — another tab,
-  // another person — triggers a refresh here too) and also polls every 8
-  // seconds as a fallback, in case an event notification is ever missed.
+  // Keeps the UI live without requiring a manual page reload, via a
+  // polling interval alone — no `dao.on(...)` event subscriptions.
+  //
+  // Those subscriptions used to be here too, but on an HTTP JSON-RPC
+  // provider (as opposed to a WebSocket one) ethers can't get pushed
+  // events, so `Contract.on()` silently falls back to its own internal
+  // polling loop per event (`eth_newFilter` + `eth_getFilterChanges`,
+  // roughly every 4s by default) — four separate polling loops running
+  // *in addition to* the interval below. That's what was tripping rate
+  // limits (429 "Request is being rate limited") even against a
+  // dedicated Infura key, not just the shared/public RPC case. A single
+  // interval is less "real-time" (up to `refresh`'s own interval of
+  // staleness) but is the only version of this that scales with
+  // concurrent users instead of multiplying their RPC load fourfold.
   useEffect(() => {
     if (!dao) {
       setUserBalance(0n);
@@ -272,25 +282,9 @@ export function DaoProvider({ children }: { children: ReactNode }) {
     }
     refresh();
 
-    const onEvent = () => refresh();
-    dao.on("Funded", onEvent);
-    dao.on("ProposalCreated", onEvent);
-    dao.on("VoteCast", onEvent);
-    dao.on("ProposalExecuted", onEvent);
-
-    // 20s rather than a more aggressive value — the event listeners above
-    // already keep the UI near-real-time for anything that happens while
-    // the tab is open; this interval only exists as a fallback for missed
-    // events, so it doesn't need to be tight. Every open tab runs this
-    // loop independently, so a shorter interval multiplies RPC load with
-    // every concurrent user.
     const interval = setInterval(refresh, 20000);
 
     return () => {
-      dao.off("Funded", onEvent);
-      dao.off("ProposalCreated", onEvent);
-      dao.off("VoteCast", onEvent);
-      dao.off("ProposalExecuted", onEvent);
       clearInterval(interval);
     };
     // Also re-run on `address` alone (not just `dao`), so switching

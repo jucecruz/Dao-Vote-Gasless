@@ -253,3 +253,62 @@ aunque la transacción en sí ya se hubiera confirmado on-chain.
 2. Crear una propuesta: debe confirmar y aparecer en la lista sin mostrar
    `could not coalesce error`, incluso si en la consola aparece algún
    `console.warn` de refresco (no bloqueante).
+
+## `Request is being rate limited` (429) de forma continua, incluso con RPC propio de Infura
+
+**Estado:** Corregido.
+
+### Síntoma
+
+Tras cambiar a un RPC dedicado (el Infura del propio proyecto), la app
+seguía recibiendo `MetaMask - RPC Error: Request is being rate limited.`
+(`code: -32005`, `httpStatus: 429`) de forma **continua y repetida** —no
+un error aislado, sino un flujo constante de rechazos— para varios
+métodos distintos (`eth_getCode`, `eth_getLogs`, `eth_newFilter`,
+`eth_blockNumber`). Una propuesta ("Proyecto de Marketing") se había
+creado correctamente on-chain (confirmado con `cast call
+getProposal(...)` contra un RPC aparte), pero no aparecía en la UI porque
+`fetchProposals()` nunca lograba completarse.
+
+### Causa raíz
+
+`web/context/DaoContext.tsx` mantenía **dos mecanismos de actualización
+en paralelo**:
+
+1. Un `setInterval(refresh, 20000)` explícito.
+2. Suscripciones `dao.on("Funded", ...)`, `dao.on("ProposalCreated", ...)`,
+   `dao.on("VoteCast", ...)`, `dao.on("ProposalExecuted", ...)`.
+
+El problema está en (2): MetaMask/Infura exponen un provider **HTTP**
+JSON-RPC, no WebSocket, así que no hay forma de que el nodo *empuje*
+eventos hacia el navegador. Cuando `Contract.on()` de ethers v6 se usa
+sobre un provider HTTP, cae automáticamente a su propio polling interno
+por evento (`eth_newFilter` una vez + `eth_getFilterChanges` cada ~4s,
+indefinidamente). Con 4 eventos suscritos, eso son **4 ciclos de polling
+corriendo en paralelo**, además del `setInterval` de 20s — suficiente
+para agotar el límite de peticiones por segundo incluso de una API key
+de Infura en su plan gratuito, no solo del RPC público compartido de
+MetaMask (ver el issue anterior).
+
+### Dónde se origina
+
+- [`web/context/DaoContext.tsx`](web/context/DaoContext.tsx) — el `useEffect` con `dao.on(...)`/`dao.off(...)`.
+
+### Corrección implementada
+
+Se eliminaron las 4 suscripciones `dao.on(...)` (y su limpieza
+`dao.off(...)` correspondiente). La actualización de la UI depende
+ahora **únicamente** del `setInterval(refresh, 20000)` — sin polling
+adicional oculto. Se pierde algo de "tiempo real" (hasta 20s de
+desfase en vez de ~4s), pero es la única versión que no multiplica la
+carga de RPC por cada pestaña abierta y cada evento suscrito.
+
+### Cómo verificar
+
+1. Con el fix desplegado, dejar la pestaña abierta varios minutos con
+   DevTools → Network filtrando por el endpoint RPC: no debería verse
+   una llamada `eth_getFilterChanges`/`eth_newFilter` repitiéndose cada
+   pocos segundos, solo el patrón de `refresh()` cada 20s.
+2. Crear una propuesta y confirmar que aparece en la lista dentro de los
+   20s siguientes, sin errores `Request is being rate limited` en
+   consola bajo uso normal (una pestaña, un usuario).
